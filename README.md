@@ -27,25 +27,38 @@
 ## 1. 代码结构与职责
 
 ```
-Assets/GameScript/
-├── AOT/                        Game.AOT         运行时：启动、资源封装、热更加载、接口
-│   ├── GameConsts.cs
-│   ├── IHotUpdateEntry.cs
-│   ├── YooAssetBoot.cs
-│   ├── RemoteService.cs
-│   ├── ResourceUpdater.cs
-│   ├── HotUpdateLoader.cs
-│   ├── BootTypes.cs
-│   ├── BootFlow.cs
-│   ├── BootUI.cs
-│   └── GameLauncher.cs
-├── AOT.Editor/                 Game.AOT.Editor  仅编辑器：构建发布、配置恢复
-│   ├── EditorSimulateBuildHook.cs
+Assets/GameScripts/
+├── AOT/                        Game.AOT
+│   ├── Game.AOT.asmdef
+│   ├── Boot/                   启动编排
+│   │   ├── Launcher.cs
+│   │   ├── BootFlow.cs
+│   │   └── BootUI.cs
+│   ├── Resource/               资源系统
+│   │   ├── YooAssetBoot.cs
+│   │   ├── YooAssetBootHooks.cs
+│   │   ├── RemoteService.cs
+│   │   └── ResourceUpdater.cs
+│   ├── HotUpdate/              热更程序集加载（AOT 侧）
+│   │   └── HotUpdateLoader.cs
+│   ├── Common/                 跨层共享
+│   │   ├── GameConsts.cs
+│   │   ├── BootTypes.cs
+│   │   └── IHotUpdateEntry.cs
+│   └── Legacy/                 已废弃，待删除
+│       └── BootTest.cs
+├── AOT.Editor/                 Game.AOT.Editor  仅编辑器
+│   ├── Game.AOT.Editor.asmdef
+│   ├── BuildAndDeployTools.cs
 │   ├── CollectorConfigRestorer.cs
-│   └── BuildAndDeployTools.cs
-└── HotUpdate/                  Game.HotUpdate   热更：业务实现
+│   └── EditorSimulateBuildHook.cs
+└── HotUpdate/                  Game.HotUpdate   热更业务
+    ├── Game.HotUpdate.asmdef
     └── GameEntry.cs
 ```
+
+> 目录只做物理分层，命名空间仍统一为 `Game.AOT`；将来某个模块要独立成程序集时再顺势拆命名空间。
+> `Legacy/BootTest.cs` 没有任何场景引用，是旧的测试入口，确认后可删除。
 
 | 类型 | 职责 | 不该做的事 |
 |---|---|---|
@@ -56,7 +69,7 @@ Assets/GameScript/
 | `HotUpdateLoader` | 补充元数据 → 加载 DLL → 反射入口 | 不知道业务逻辑 |
 | `BootFlow` | 状态机、重试/回退决策 | 不直接操作 UI |
 | `BootUI` | 进度与失败弹窗，只订阅事件 | 不控制流程 |
-| `GameLauncher` | 场景唯一启动点 | — |
+| `Launcher` | 场景唯一启动点 | — |
 | `GameEntry`（热更侧） | 业务入口，实现 `IHotUpdateEntry` | 不引用编辑器程序集 |
 
 ---
@@ -64,7 +77,7 @@ Assets/GameScript/
 ## 2. 启动时序
 
 ```
-GameLauncher.Start
+Launcher.Start
   └─ BootFlow.RunAsync
        ├─ 1. YooAssetBoot.InitializeAsync
        │      YooAssets.Initialize → CreatePackage → InitializePackageAsync
@@ -330,7 +343,7 @@ BootFlow.Finished += OnFinished;
 - 进度条用 `RectTransform.anchorMax.x` 驱动，不用 Slider；
 - 中文字体 `Font.CreateDynamicFontFromOSFont("Microsoft YaHei", 20)`。
 
-### 6.7 `GameLauncher`
+### 6.7 `Launcher`
 
 ```csharp
 private async UniTaskVoid Start()   // 生命周期方法不能用 async UniTask

@@ -88,7 +88,7 @@ namespace Game.AOT
             //若这里再Assemble.Load 会出现两个同名程序集
             //热更类型无法转换成 AOT 侧的 IHotUpdateEntry
 
-            HotUpdateAssembly = FindLoadedAssembly(GameConsts.HotUpdateAssenbleName);
+            HotUpdateAssembly = FindLoadedAssembly(GameConsts.HotUpdateAssenblyName);
             if (HotUpdateAssembly == null)
             {
                 HotUpdateAssembly = Assembly.Load(dllBytes);

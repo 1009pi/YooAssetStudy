@@ -10,7 +10,7 @@ namespace Game.AOT
         public const string PackageName = "MainPackage";
 
         //热更新主程序集文件名 不含.byte后缀
-        public const string HotUpdateAssenbleName = "Game.HotUpdate";
+        public const string HotUpdateAssenblyName = "Game.HotUpdate";
 
         /// <summary>热更新 DLL 在 YooAsset 里的资源地址</summary>
         public const string HotUpdateDllLocation = "Game.HotUpdate.dll";
