@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<linker>
+  <assembly fullname="Game.AOT">
+    <type fullname="Game.AOT.IHotUpdateEntry" preserve="all" />
+    <type fullname="Game.AOT.YooAssetBoot" preserve="all" />
+  </assembly>
+  <assembly fullname="UniTask">
+    <type fullname="Cysharp.Threading.Tasks.CompilerServices.AsyncUniTaskVoidMethodBuilder" preserve="all" />
+    <type fullname="Cysharp.Threading.Tasks.UniTaskVoid" preserve="all" />
+  </assembly>
+  <assembly fullname="UnityEngine.CoreModule">
+    <type fullname="UnityEngine.GameObject" preserve="all" />
+    <type fullname="UnityEngine.Object" preserve="all" />
+  </assembly>
+  <assembly fullname="YooAsset">
+    <type fullname="YooAsset.AssetHandle" preserve="all" />
+    <type fullname="YooAsset.AsyncOperationBase" preserve="all" />
+    <type fullname="YooAsset.EOperationStatus" preserve="all" />
+    <type fullname="YooAsset.HandleBase" preserve="all" />
+    <type fullname="YooAsset.InstantiateOperation" preserve="all" />
+    <type fullname="YooAsset.OperationAwaiter" preserve="all" />
+    <type fullname="YooAsset.ResourcePackage" preserve="all" />
+  </assembly>
+  <assembly fullname="netstandard">
+    <type fullname="System.Diagnostics.DebuggableAttribute" preserve="all" />
+    <type fullname="System.Diagnostics.DebuggableAttribute/DebuggingModes" preserve="all" />
+    <type fullname="System.Diagnostics.DebuggerHiddenAttribute" preserve="all" />
+    <type fullname="System.Exception" preserve="all" />
+    <type fullname="System.Object" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.AsyncStateMachineAttribute" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.CompilationRelaxationsAttribute" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.CompilerGeneratedAttribute" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.IAsyncStateMachine" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.RuntimeCompatibilityAttribute" preserve="all" />
+    <type fullname="System.String" preserve="all" />
+    <type fullname="System.Type" preserve="all" />
+    <type fullname="System.ValueType" preserve="all" />
+  </assembly>
+</linker>
