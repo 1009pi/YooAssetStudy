@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "aotMetadata": [
+    { "name": "mscorlib", "location": "mscorlib.dll" },
+    { "name": "System", "location": "System.dll" },
+    { "name": "System.Core", "location": "System.Core.dll" },
+    { "name": "UniTask", "location": "UniTask.dll" },
+    { "name": "YooAsset", "location": "YooAsset.dll" }
+  ],
+  "assemblies": [
+    { "name": "Game.Hot.Framework", "location": "Game.Hot.Framework.dll" },
+    { "name": "Game.Hot.GameMain", "location": "Game.Hot.GameMain.dll" },
+    { "name": "Game.Hot.GameEntry", "location": "Game.Hot.GameEntry.dll" }
+  ]
+}

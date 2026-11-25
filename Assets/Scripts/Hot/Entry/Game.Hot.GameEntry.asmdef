@@ -1,0 +1,20 @@
+{
+    "name": "Game.Hot.GameEntry",
+    "rootNamespace": "",
+    "references": [
+        "GUID:f51ebe6a0ceec4240a699833d6309b23",
+        "GUID:587fb3d5d52432348a61768c790e05db",
+        "GUID:e34a5702dd353724aa315fb8011f08c3",
+        "GUID:8338aea15d3072f45b157ec58fed6030",
+        "GUID:ed01b1916c23aff4685b37a5865b3e75"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

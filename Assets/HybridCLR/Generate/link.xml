@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <linker>
   <assembly fullname="Game.AOT">
-    <type fullname="Game.AOT.IHotUpdateEntry" preserve="all" />
+    <type fullname="Game.AOT.IHotAssemblyEntry" preserve="all" />
     <type fullname="Game.AOT.YooAssetBoot" preserve="all" />
   </assembly>
   <assembly fullname="UniTask">
@@ -10,6 +10,7 @@
   </assembly>
   <assembly fullname="UnityEngine.CoreModule">
     <type fullname="UnityEngine.GameObject" preserve="all" />
+    <type fullname="UnityEngine.MonoBehaviour" preserve="all" />
     <type fullname="UnityEngine.Object" preserve="all" />
   </assembly>
   <assembly fullname="YooAsset">

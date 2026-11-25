@@ -25,42 +25,42 @@ MonoBehaviour:
     AutoCollectShaders: 1
     IgnoreRuleName: NormalIgnoreRule
     Groups:
-    - GroupName: Res
+    - GroupName: HotResources
       GroupDesc: "\u666E\u901A\u6E38\u620F\u8D44\u6E90"
       AssetTags: 
       ActiveRuleName: EnableGroup
       Collectors:
-      - CollectPath: Assets/GameRes/Common
-        CollectorGUID: 
+      - CollectPath: Assets/HotResources/Global
+        CollectorGUID: 276f8b157f5196d4ea1edf8b2ed59e44
         CollectorType: 0
         AddressRuleName: AddressByFileName
         PackRuleName: PackDirectory
         FilterRuleName: CollectAll
-        AssetTags: common
+        AssetTags: global
         UserData: 
-      - CollectPath: Assets/GameRes/UI
-        CollectorGUID: 
-        CollectorType: 0
-        AddressRuleName: AddressByFileName
-        PackRuleName: PackDirectory
-        FilterRuleName: CollectAll
-        AssetTags: ui
-        UserData: 
-      - CollectPath: Assets/GameRes/Configs
-        CollectorGUID: 
+      - CollectPath: Assets/HotResources/Configs
+        CollectorGUID: d52971d4cf6d8b34a8be043888dcdb6d
         CollectorType: 0
         AddressRuleName: AddressByFileName
         PackRuleName: PackDirectory
         FilterRuleName: CollectAll
         AssetTags: config
         UserData: 
-    - GroupName: HotUpdate
+      - CollectPath: Assets/HotResources/Level_Lobby
+        CollectorGUID: d9dc87b239854f74ab5c5f47b39679bd
+        CollectorType: 0
+        AddressRuleName: AddressByFileName
+        PackRuleName: PackDirectory
+        FilterRuleName: CollectAll
+        AssetTags: level_lobby
+        UserData: 
+    - GroupName: HotAssemblies
       GroupDesc: "\u70ED\u66F4 DLL \u4E0E\u5143\u6570\u636E"
-      AssetTags: hotupdate
+      AssetTags: assemblies
       ActiveRuleName: EnableGroup
       Collectors:
-      - CollectPath: Assets/GameRes/HotUpdate
-        CollectorGUID: 
+      - CollectPath: Assets/HotAssemblies
+        CollectorGUID: fce40156bc39b974ebebf3fb00726741
         CollectorType: 0
         AddressRuleName: AddressByFileName
         PackRuleName: PackDirectory
