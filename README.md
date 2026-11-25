@@ -1,522 +1,214 @@
-# YooAssetStudy
+# YooAssetStudy 热更框架说明
 
-> YooAsset 3.0.7 + HybridCLR + UniTask 热更框架 · 代码笔记
->
-> 工程环境：Unity 6000.3.24f1 / 资源包 `MainPackage` / 本地 CDN `D:\CDNServer`
-> 运行时包根地址：`http://127.0.0.1:8080/Windows/MainPackage`
+基于 YooAsset（资源热更）+ HybridCLR（代码热更）的 Unity 热更框架。
 
----
+| 项        | 版本        |
+| --------- | ----------- |
+| Unity     | 6000.3.23f1 |
+| YooAsset  | 3.0.7       |
+| HybridCLR | 9.1.0       |
+| UniTask   | 2.5.11      |
 
-## 目录
+整体分两部分：
 
-1. [代码结构与职责](#1-代码结构与职责)
-2. [启动时序](#2-启动时序)
-3. [程序集与依赖约束](#3-程序集与依赖约束)
-4. [YooAsset 3.0 API 速查](#4-yooasset-30-api-速查)
-5. [Handle 与资源生命周期](#5-handle-与资源生命周期)
-6. [封装层实现要点](#6-封装层实现要点)
-7. [HybridCLR 运行时](#7-hybridclr-运行时)
-8. [编辑器脚本 API](#8-编辑器脚本-api)
-9. [收集规则与地址](#9-收集规则与地址)
-10. [代码级易错点](#10-代码级易错点)
-11. [构建发布流程](#11-构建发布流程)
-12. [小结论](#12-小结论)
+- **AOT 部分（`Game.AOT`）**：随安装包发布，只负责引导、资源更新、加载热更程序集，不含框架和业务代码。
+- **热更部分（`Game.Hot.*`）**：框架和业务都在这里，以 dll 的形式当作资源下发。
+
+命名约定：程序侧（程序集、类、清单）统一用 `HotAssembly` / `HotAssemblies`；`HotUpdate` 只用于流程和资源侧（热更流程、测试版本号）。
 
 ---
 
-## 1. 代码结构与职责
+## 一、程序集划分
 
-```
-Assets/GameScripts/
-├── AOT/                        Game.AOT
-│   ├── Game.AOT.asmdef
-│   ├── Boot/                   启动编排
-│   │   ├── Launcher.cs
-│   │   ├── BootFlow.cs
-│   │   └── BootUI.cs
-│   ├── Resource/               资源系统
-│   │   ├── YooAssetBoot.cs
-│   │   ├── YooAssetBootHooks.cs
-│   │   ├── RemoteService.cs
-│   │   └── ResourceUpdater.cs
-│   ├── HotUpdate/              热更程序集加载（AOT 侧）
-│   │   └── HotUpdateLoader.cs
-│   ├── Common/                 跨层共享
-│   │   ├── GameConsts.cs
-│   │   ├── BootTypes.cs
-│   │   └── IHotUpdateEntry.cs
-│   └── Legacy/                 已废弃，待删除
-│       └── BootTest.cs
-├── AOT.Editor/                 Game.AOT.Editor  仅编辑器
-│   ├── Game.AOT.Editor.asmdef
-│   ├── BuildAndDeployTools.cs
-│   ├── CollectorConfigRestorer.cs
-│   └── EditorSimulateBuildHook.cs
-└── HotUpdate/                  Game.HotUpdate   热更业务
-    ├── Game.HotUpdate.asmdef
-    └── GameEntry.cs
-```
+| 程序集               | 目录                           | 职责                               | 可热更 | 依赖                                             |
+| -------------------- | ------------------------------ | ---------------------------------- | ------ | ------------------------------------------------ |
+| `Game.AOT`           | `Assets/Scripts/AOT`           | 启动流程、资源更新、热更程序集加载 | 否     | YooAsset、UniTask、HybridCLR Runtime             |
+| `Game.AOT.Editor`    | `Assets/Scripts/Editor`        | 编辑器工具                         | 否     | YooAsset.Editor                                  |
+| `Game.Hot.Framework` | `Assets/Scripts/Hot/Framework` | 框架底层，不含业务                 | 是     | 无                                               |
+| `Game.Hot.GameMain`  | `Assets/Scripts/Hot/Game`      | 游戏通用玩法                       | 是     | Framework                                        |
+| `Game.Hot.GameEntry` | `Assets/Scripts/Hot/Entry`     | 热更入口和业务                     | 是     | Framework、GameMain、Game.AOT、YooAsset、UniTask |
 
-> 目录只做物理分层，命名空间仍统一为 `Game.AOT`；将来某个模块要独立成程序集时再顺势拆命名空间。
-> `Legacy/BootTest.cs` 没有任何场景引用，是旧的测试入口，确认后可删除。
+### 规则
 
-| 类型 | 职责 | 不该做的事 |
-|---|---|---|
-| `GameConsts` | 包名、CDN 地址、程序集名、模式开关 | 不写逻辑 |
-| `RemoteService` | 文件名 → URL | 不知道清单内容 |
-| `YooAssetBoot` | 初始化 YooAssets + 建包 + 挂文件系统 | **不碰版本、清单、下载** |
-| `ResourceUpdater` | 请求版本 → 加载清单 → 差量下载 | 不加载业务资源 |
-| `HotUpdateLoader` | 补充元数据 → 加载 DLL → 反射入口 | 不知道业务逻辑 |
-| `BootFlow` | 状态机、重试/回退决策 | 不直接操作 UI |
-| `BootUI` | 进度与失败弹窗，只订阅事件 | 不控制流程 |
-| `Launcher` | 场景唯一启动点 | — |
-| `GameEntry`（热更侧） | 业务入口，实现 `IHotUpdateEntry` | 不引用编辑器程序集 |
+1. **依赖方向只能单向**：`GameEntry → GameMain → Framework`。Framework 不能依赖另外两个，否则分层失效。
+2. **AOT 不能引用热更程序集**。热更程序集可以引用 `Game.AOT`，但只用 `IHotAssemblyEntry`、`CommonData`、`YooAssetBoot` 这类稳定的引导接口。
+3. **入口靠接口，不靠引用**：入口类实现 `Game.AOT.IHotAssemblyEntry`，AOT 用反射找到它并调用 `OnStart()`。
+4. **程序集名 = asmdef 的 `name` 字段**，与文件名、命名空间无关。热更程序集统一以 `Game.Hot.` 开头。
+5. 目前 Framework 和 GameMain 里只有占位脚本，划分是为了约束依赖方向，随业务填充。
+
+### 新增一个热更程序集
+
+1. 新建 asmdef，`name` 以 `Game.Hot.` 开头，按分层填好引用。
+2. 在 `HybridCLR → Settings → 热更新程序集` 里注册这个 asmdef。
+3. 执行 `HybridCLR → Generate → All`。
+4. 把生成的 `xxx.dll.bytes` 放进 `Assets/HotAssemblies/`。
+5. 在 `hotupdate_manifest.json` 的 `assemblies` 里加一条，被依赖的排在前面。
 
 ---
 
-## 2. 启动时序
+## 二、资源划分
 
-```
-Launcher.Start
-  └─ BootFlow.RunAsync
-       ├─ 1. YooAssetBoot.InitializeAsync
-       │      YooAssets.Initialize → CreatePackage → InitializePackageAsync
-       ├─ 2. ResourceUpdater.UpdateManifestAsync
-       │      RequestPackageVersionAsync → RemoteService.Version = v
-       │      LoadPackageManifestAsync(v)
-       ├─ 3. ResourceUpdater.DownloadAsync(["hotupdate"])
-       ├─ 4. HotUpdateLoader.LoadAsync
-       │      LoadMetadataForAOTAssembly → Assembly.Load(dllBytes) → 反射入口
-       ├─ 5. ResourceUpdater.DownloadAsync(null)
-       ├─ 6. ResourceUpdater.MarkVersionUsable
-       └─ 7. HotUpdateLoader.StartGame → GameEntry.OnStart
-```
+YooAsset 只有一个资源包 `MainPackage`，资源按目录分成两组：
 
-顺序约束（都是硬性的）：
+| 目录                              | 收集器组      | 标签          | 内容                                 |
+| --------------------------------- | ------------- | ------------- | ------------------------------------ |
+| `Assets/HotAssemblies`            | HotAssemblies | `assemblies`  | 热更 dll、AOT 元数据 dll、程序集清单 |
+| `Assets/HotResources/Global`      | HotResources  | `global`      | 全局资源（Common、UI）               |
+| `Assets/HotResources/Configs`     | HotResources  | `config`      | 配置表                               |
+| `Assets/HotResources/Level_Lobby` | HotResources  | `level_lobby` | 大厅关卡（场景、Prefab、RawAssets）  |
 
-- 版本 / 清单必须在 `RemoteService.Version` 赋值之后；
-- 更新必须在加载任何业务资源之前；
-- 元数据必须在 `Assembly.Load` 之前；
-- 代码 DLL 先下载，美术资源后下载（避免"新资源 + 旧代码"）。
+### 规则
 
----
-
-## 3. 程序集与依赖约束
-
-| 约束 | 代码体现 |
-|---|---|
-| 运行时不能引用编辑器程序集 | `Game.AOT` 不引用 `YooAsset.Editor` / `HybridCLR.Editor` |
-| AOT 不能引用热更程序集 | 通过 `IHotUpdateEntry` + 反射 |
-| 依赖单向 | `Game.HotUpdate` → `Game.AOT` |
-| 热更程序集不能进安装包 | asmdef `Auto Referenced = false` + 登记 HybridCLR Hot Update Assemblies |
-
-asmdef 引用一览：
-
-| asmdef | 引用 |
-|---|---|
-| `Game.AOT` | `YooAsset`、`UniTask`、`HybridCLR.Runtime` |
-| `Game.AOT.Editor` | `Game.AOT`、`YooAsset.Editor`、`HybridCLR.Editor`（仅 Editor 平台） |
-| `Game.HotUpdate` | `Game.AOT`、`YooAsset`、`UniTask` |
-
-> `HybridCLR.Runtime` 是 asmdef 名；代码里的命名空间是 `HybridCLR`。
+1. **所有收集器统一配置**：地址规则 `AddressByFileName`，打包规则 `PackDirectory`（每个子目录打成一个 Bundle）。
+2. **资源地址 = 文件名去掉最后一个扩展名**：
+   - `Game.Hot.GameEntry.dll.bytes` → `Game.Hot.GameEntry.dll`
+   - `hotupdate_manifest.json` → `hotupdate_manifest`（不带 `.json`）
+   - `MainPanel.prefab` → `MainPanel`
+3. **标签决定下载时机**。`assemblies` 在加载热更代码之前下载，其余资源在代码加载之后下载。新增一类需要提前下载的资源时，才需要新标签。
+4. 一个资源可以有多个标签，收集器里用 `;` 分隔；不同收集器可以共用同一个标签。
+5. 按标签下载时，没打标签的 Bundle 只要被依赖也会一起下载。
+6. **新增关卡**：在 `HotResources` 下新建 `Level_X` 目录，加一个收集器，标签用 `level_x`。
+7. 代码用到的地址和标签集中写在 `CommonData`，不要在其他脚本里手写字符串。
 
 ---
 
-## 4. YooAsset 3.0 API 速查
+## 三、热更流程（AOT 基础框架）
 
-```csharp
-// 系统
-YooAssets.Initialize();                              // 全进程一次
-YooAssets.IsInitialized
-YooAssets.CreatePackage("MainPackage");
-YooAssets.TryGetPackage("MainPackage", out var p);
-YooAssets.Destroy();
+入口是场景里的 `Launcher`，它调用 `BootFlow.RunAsync()`。
 
-// 包初始化
-package.InitializeStatus                            // EOperationStatus
-package.InitializePackageAsync(InitializePackageOptions)
+| 步骤 | 状态                 | 做什么                                      | 失败后可否跳过 |
+| ---- | -------------------- | ------------------------------------------- | -------------- |
+| 1    | Initializing         | 初始化 YooAsset 资源包                      | 否             |
+| 2    | CheckingVersion      | 请求版本号，加载对应清单                    | 是             |
+| 3    | DownloadingCode      | 下载标签 `assemblies` 的资源                | 是             |
+| 4    | LoadingScripts       | 读清单、补充 AOT 元数据、按顺序加载热更 dll | 否             |
+| 5    | DownloadingResources | 下载剩余全部资源                            | 否             |
+| 6    | EnteringGame         | 反射调用入口 `OnStart()`                    | 否             |
 
-// 版本 / 清单
-package.RequestPackageVersionAsync(RequestPackageVersionOptions(bool appendTimeTicks, int timeout))
-       → RequestPackageVersionOperation.PackageVersion
-package.LoadPackageManifestAsync(new LoadPackageManifestOptions(version, timeout))
-package.GetPackageVersion()                         // 需要已加载清单，否则 NRE
-package.IsLocationValid(location)                   // 查清单，地址自检
+### 加载热更程序集（步骤 4）
 
-// 下载
-package.CreateResourceDownloader(new ResourceDownloaderOptions(maxConcurrency, retryCount))
-package.CreateResourceDownloader(new ResourceDownloaderOptions(string[] tags, max, retry))
-package.CreateBundleDownloader(new BundleDownloaderOptions(assetInfos, downloadDependencies, max, retry))
-package.GetDownloadSize(location)
+`HotAssemblyLoader.LoadAsync` 依次做四件事：
 
-// 加载
-package.LoadAssetAsync<T>(location, priority)
-package.LoadSubAssetsAsync<T>(location)
-package.LoadAllAssetsAsync<T>(location)
-package.LoadSceneAsync(location, LoadSceneMode.Single, ..., allowSceneActivation, priority)
-```
+1. 读取 `hotupdate_manifest.json`，校验 `protocolVersion`。
+2. 按 `aotMetadata` 列表逐个调用 `HybridCLR.RuntimeApi.LoadMetadataForAOTAssembly`。
+3. 按 `assemblies` 列表顺序 `Assembly.Load`。
+4. 在已加载的程序集里找定义了入口类型的那个，记为 `EntryAssembly`。
 
-### Options 类（3.0 与 2.x 的分界线）
+Editor 下 Unity 已经编译并加载了热更程序集，加载器按程序集名直接复用，不会重复 `Assembly.Load`；补充元数据在 Editor 下是空实现。这两步只在真机上真正生效。
 
-```csharp
-new EditorSimulateModeOptions { EditorFileSystemParameters = ... }
-new OfflinePlayModeOptions    { BuiltinFileSystemParameters = ... }
-new HostPlayModeOptions       { BuiltinFileSystemParameters = ..., CacheFileSystemParameters = ... }
-new WebPlayModeOptions        { WebServerFileSystemParameters = ..., WebNetworkFileSystemParameters = ... }
-```
+### 失败处理
 
-文件系统参数工厂：
+- **重试**：重新执行当前步骤。
+- **跳过更新**：只在步骤 2、3 可用，回退到上次启动成功的版本（记录在 PlayerPrefs）。热更代码一旦加载就无法卸载，所以步骤 4 之后不允许回退。
+- **中止**：流程结束。
 
-```csharp
-FileSystemParameters.CreateDefaultEditorFileSystemParameters(packageRoot);
-FileSystemParameters.CreateDefaultBuiltinFileSystemParameters();
-FileSystemParameters.CreateDefaultSandboxFileSystemParameters(remoteService);
-```
-
-`HostPlayModeOptions` 的顺序很重要：**最后一个文件系统是主文件系统**，版本请求与清单加载只走它（沙盒放最后）。
-
-### 3.0 与 2.x 差异
-
-| 2.x | 3.0 |
-|---|---|
-| `HostPlayModeParameters` | `HostPlayModeOptions` |
-| `InitializeAsync(params)` | `InitializePackageAsync(options)` |
-| `RequestPackageVersionAsync(bool,int)` | `RequestPackageVersionAsync(RequestPackageVersionOptions)` |
-| `UpdatePackageManifestAsync(version)` | `LoadPackageManifestAsync(new LoadPackageManifestOptions(version, 60))` |
-| `CreateResourceDownloader(max,retry)` | `CreateResourceDownloader(new ResourceDownloaderOptions(max,retry))` |
-| `BeginDownload()` | `StartDownload()` |
-| `DownloadUpdateCallback = ...` | `DownloadProgressChanged += ...`（事件） |
-| `EOperationStatus.Succeed` | `EOperationStatus.Succeeded` |
-| `IRemoteServices.GetRemoteMainURL/FallbackURL` | `IRemoteService.GetRemoteUrls(fileName) : IReadOnlyList<string>` |
-| `YooAssets.SetDefaultPackage()` + 静态加载 | 已移除，全部走 `ResourcePackage` |
-
-### 状态与异步的两个坑
-
-```csharp
-public enum EOperationStatus { None, Processing, Succeeded, Failed }
-```
-
-1. **`await op` 不抛异常**（`OperationAwaiter.GetResult()` 是空实现）：
-
-```csharp
-await op;
-if (op.Status != EOperationStatus.Succeeded)
-    Debug.LogError(op.Error);
-```
-
-2. **操作必须"先启动后等待"**：
-
-```csharp
-downloader.StartDownload();   // 提交到调度器
-await downloader;             // 否则永远不完成
-```
-
-`CreateResourceDownloader` 只创建对象，不启动。
+启动全部成功后，当前版本被 `MarkVersionUsable` 记为“上次可用版本”。
 
 ---
 
-## 5. Handle 与资源生命周期
+## 四、程序集清单 hotupdate_manifest.json
 
-```csharp
-AssetHandle handle = package.LoadAssetAsync<GameObject>("MainPanel");
-await handle;
-if (handle.Status != EOperationStatus.Succeeded) return;
+和 dll 放在一起，随资源热更，路径 `Assets/HotAssemblies/hotupdate_manifest.json`：
 
-GameObject prefab = handle.GetAssetObject<GameObject>();   // 或 handle.AssetObject
-var instOp = handle.InstantiateAsync();
-await instOp;
-GameObject go = instOp.Result;
-
-handle.Release();     // 实例销毁后再释放
-```
-
-- `HandleBase`：`Status` / `Error` / `IsDone` / `IsValid` / `Release()` / `GetAwaiter()`
-- `AssetHandle`：`AssetObject` / `GetAssetObject<T>()` / `InstantiateAsync()` / `InstantiateSync()` / `WaitForAsyncComplete()`
-- `InstantiateOperation`：`Result` / `Status` / `Error`
-
----
-
-## 6. 封装层实现要点
-
-### 6.1 `RemoteService : IRemoteService`
-
-```csharp
-public IReadOnlyList<string> GetRemoteUrls(string fileName)
+```json
 {
-    if (fileName.EndsWith(".version")) return new[] { $"{root}/{fileName}" };
-    return new[] { $"{root}/{Version}/{fileName}" };
+  "protocolVersion": 1,
+  "aotMetadata": [
+    { "name": "mscorlib", "location": "mscorlib.dll" },
+    { "name": "System", "location": "System.dll" },
+    { "name": "System.Core", "location": "System.Core.dll" },
+    { "name": "UniTask", "location": "UniTask.dll" },
+    { "name": "YooAsset", "location": "YooAsset.dll" }
+  ],
+  "assemblies": [
+    { "name": "Game.Hot.Framework", "location": "Game.Hot.Framework.dll" },
+    { "name": "Game.Hot.GameMain", "location": "Game.Hot.GameMain.dll" },
+    { "name": "Game.Hot.GameEntry", "location": "Game.Hot.GameEntry.dll" }
+  ]
 }
 ```
 
-- 3.0 传进来的只有**文件名**（`MainPackage.version`、`xxx.bundle`），包名和版本目录由业务拼；
-- 返回的是候选地址列表，可做 CDN 主备；
-- `Version` 必须在加载清单前赋值。
+| 字段              | 说明                                                         |
+| ----------------- | ------------------------------------------------------------ |
+| `protocolVersion` | 清单格式版本。高于客户端支持的版本时拒绝加载，提示更新安装包 |
+| `aotMetadata`     | 需要补充元数据的 AOT 程序集，在热更 dll 之前加载             |
+| `assemblies`      | 热更程序集，被依赖的排在前面                                 |
+| `name`            | 程序集名，不带 `.dll`                                        |
+| `location`        | 在 YooAsset 里的资源地址                                     |
 
-### 6.2 `YooAssetBoot`：只做初始化
+AOT 元数据 dll 取自 `Library/HybridCLR/AssembliesPostIl2CppStrip/<平台>/`，列表和 `HybridCLR/Generate/AOTGenericReferences.cs` 里的 `PatchedAOTAssemblyList` 保持一致。不同平台的元数据 dll 不能混用。
 
-```csharp
-YooAssets.Initialize();
-if (YooAssets.TryGetPackage(name, out var exist)) Package = exist;
-else Package = YooAssets.CreatePackage(name);
+---
 
-if (Package.InitializeStatus == EOperationStatus.Succeeded) return true;   // 幂等
+## 五、AOT 脚本一览
 
-var initOp = Package.InitializePackageAsync(options);
-await initOp;
-if (initOp.Status != EOperationStatus.Succeeded) return false;
-```
+| 脚本                               | 说明                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------ |
+| `Boot/Launcher.cs`                 | 场景入口 MonoBehaviour，启动 `BootFlow`                                              |
+| `Boot/BootFlow.cs`                 | 启动流程。只管步骤和失败决策，通过事件把进度和失败告诉界面                           |
+| `Boot/BootUI.cs`                   | 启动界面：进度条和失败弹窗。只订阅 `BootFlow` 事件                                   |
+| `Boot/BootTypes.cs`                | `BootState`、`BootDecision`、`BootProgress`、`BootFailure`                           |
+| `Common/CommonData.cs`             | 全局常量：包名、清单地址、标签、入口类型名、服务器地址                               |
+| `Common/IHotAssemblyEntry.cs`      | 热更入口接口，只有一个 `OnStart()`                                                   |
+| `HotAssembly/HotAssemblyLoader.cs` | 读清单、补充元数据、加载热更程序集、启动入口                                         |
+| `Resource/YooAssetBoot.cs`         | 初始化 YooAsset 资源包，提供 `Package`、`PackageVersion`                             |
+| `Resource/ResourceUpdater.cs`      | 请求版本、加载清单、按标签下载、回退、标记可用版本                                   |
+| `Resource/RemoteService.cs`        | 联机模式的远程服务：版本文件在 `<root>/MainPackage.version`，其余在 `<root>/<版本>/` |
+| `Resource/YooAssetBootHooks.cs`    | 运行时和编辑器程序集之间的桥，让 `Game.AOT` 不用引用 `YooAsset.Editor`               |
 
-职责边界：**不请求版本、不加载清单**。这两个动作依赖 `RemoteService.Version`，属于更新层。
+| 编辑器脚本（`Game.AOT.Editor`） | 说明                                            |
+| ------------------------------- | ----------------------------------------------- |
+| `EditorSimulateBuildHook.cs`    | Editor 启动时把模拟构建注入 `YooAssetBootHooks` |
+| `CollectorConfigRestorer.cs`    | 重建收集器配置的工具，内容尚未和当前配置同步    |
 
-### 6.3 `ResourceUpdater`：三段式
-
-```csharp
-// 请求（失败回退本地记录）
-var (ok, version) = await RequestVersionAsync();
-
-// 清单
-RemoteService.Version = version;                 // 顺序关键
-await package.LoadPackageManifestAsync(new LoadPackageManifestOptions(version, 60));
-PackageVersion = version;
-
-// 下载（tags = null 表示全部）
-var downloader = package.CreateResourceDownloader(options);
-if (downloader.TotalDownloadCount == 0) return true;
-downloader.DownloadProgressChanged += args => ...;
-downloader.DownloadError += args => ...;
-downloader.StartDownload();
-await downloader;
-return downloader.Status == EOperationStatus.Succeeded;
-```
-
-`LastGoodVersion` 只在**下载成功后**写入，避免把"清单成功但资源不全"的版本记成可用。
-
-### 6.4 `HotUpdateLoader`
+### 常用接口
 
 ```csharp
-// ① 补充元数据：必须在 Assembly.Load 之前
-LoadImageErrorCode err = RuntimeApi.LoadMetadataForAOTAssembly(bytes, HomologousImageMode.SuperSet);
-if (err != LoadImageErrorCode.OK) return false;
+// 启动流程
+BootFlow.RunAsync();                      // 返回是否成功
+BootFlow.ProgressChanged / Failed / Finished   // 事件
+BootFlow.Answer(BootDecision);            // 界面回传用户选择
 
-// ② 热更主程序集
-Assembly asm = FindLoadedAssembly("Game.HotUpdate") ?? Assembly.Load(dllBytes);
-// 编辑器里 Unity 已加载同程序集，再 Load 会产生同名双份 → 类型转换失败
+// 热更程序集
+HotAssemblyLoader.LoadAsync(onProgress);  // 引导阶段调用
+HotAssemblyLoader.StartGame();            // 引导阶段调用
+HotAssemblyLoader.LoadAssembleAsync(dllLocation);   // 预留：热更代码后续加载额外 dll
 
-// ③ 反射入口 + 接口转换
-Type type = asm.GetType("Game.HotUpdate.GameEntry");
-if (typeof(IHotUpdateEntry).IsAssignableFrom(type) == false) return false;
-((IHotUpdateEntry)Activator.CreateInstance(type)).OnStart();
-```
-
-### 6.5 `BootFlow`：状态机 + 决策回传
-
-```csharp
-Func<Action<string, float>, UniTask<bool>>   // 每个步骤的统一签名
-RunStepAsync(state, title, action, from, to, canSkipUpdate)
-
-// 失败询问 UI
-_decisionSource = new UniTaskCompletionSource<BootDecision>();
-Failed?.Invoke(failure);
-BootDecision decision = await _decisionSource.Task;
-
-// UI 回传
-BootFlow.Answer(BootDecision.Retry);
-```
-
-进度映射：
-
-```csharp
-Report(state, Mathf.Lerp(from, to, Mathf.Clamp01(local)), message);
-```
-
-`canSkipUpdate` 只在**加载热更程序集之前**为 true（状态一致性）。
-
-### 6.6 `BootUI`：只订阅事件
-
-```csharp
-BootFlow.ProgressChanged += OnProgress;
-BootFlow.Failed += OnFailed;
-BootFlow.Finished += OnFinished;
-```
-
-- 全部代码构建，无预制体：Canvas + CanvasScaler(1920×1080) + Image + Text + Button；
-- 进度条用 `RectTransform.anchorMax.x` 驱动，不用 Slider；
-- 中文字体 `Font.CreateDynamicFontFromOSFont("Microsoft YaHei", 20)`。
-
-### 6.7 `Launcher`
-
-```csharp
-private async UniTaskVoid Start()   // 生命周期方法不能用 async UniTask
-{
-    bool ok = await BootFlow.RunAsync();
-    ...
-}
-```
-
-热更侧同样使用 `UniTaskVoid` + `.Forget()`：
-
-```csharp
-private async UniTaskVoid LoadMainPanel() { ... }
-public void OnStart() { LoadMainPanel().Forget(); }
+// 资源更新
+ResourceUpdater.UpdateManifestAsync(onProgress);
+ResourceUpdater.DownloadAsync(tags, onProgress);    // tags 传 null 表示全部
+ResourceUpdater.RollbackToLastGoodAsync(onProgress);
+ResourceUpdater.MarkVersionUsable();
 ```
 
 ---
 
-## 7. HybridCLR 运行时
+## 六、热更脚本一览
 
-```csharp
-using HybridCLR;
+| 脚本                                | 说明                                                               |
+| ----------------------------------- | ------------------------------------------------------------------ |
+| `Hot/Entry/GameEntry.cs`            | 热更入口，实现 `IHotAssemblyEntry`。`OnStart()` 里加载 `MainPanel` |
+| `Hot/Framework/Core/EmptyScript.cs` | 占位脚本，保证 asmdef 有内容                                       |
+| `Hot/Game/TestScript.cs`            | 占位脚本                                                           |
 
-public enum HomologousImageMode { Consistent, SuperSet }
-
-public enum LoadImageErrorCode
-{
-    OK = 0,
-    BAD_IMAGE,
-    NOT_IMPLEMENT,
-    AOT_ASSEMBLY_NOT_FIND,
-    HOMOLOGOUS_ONLY_SUPPORT_AOT_ASSEMBLY,
-    HOMOLOGOUS_ASSEMBLY_HAS_LOADED,
-    INVALID_HOMOLOGOUS_MODE,
-    PDB_BAD_FILE,
-    UNKNOWN_IMAGE_FORMAT,
-    UNSUPPORT_FORMAT_VERSION,
-    UNMATCH_FORMAT_VARIANT,
-}
-
-RuntimeApi.LoadMetadataForAOTAssembly(byte[] dllBytes, HomologousImageMode mode);
-```
-
-注意：
-
-- 编辑器下 `LoadMetadataForAOTAssembly` 是空实现，直接返回 `OK`；真机才生效；
-- 补充元数据只对 AOT 程序集有效，误传热更 DLL 会得到 `HOMOLOGOUS_ONLY_SUPPORT_AOT_ASSEMBLY`；
-- 泛型问题典型表现：编辑器正常，真机 `MissingMethodException` / `ExecutionEngineException`。
+入口类型全名是 `Game.Hot.GameEntry.GameEntry`（命名空间 `Game.Hot.GameEntry` + 类名 `GameEntry`），对应常量 `CommonData.HotAssemblyEntryTypeName`。
 
 ---
 
-## 8. 编辑器脚本 API
+## 七、Editor 调试
 
-```csharp
-// 模拟构建（编辑器调试）
-var p = new PackageBuildParameters(GameConsts.PackageName)
-{
-    BuildPipelineName = nameof(EBuildPipeline.EditorSimulateBuildPipeline),
-    BuildBundleType = (int)EBundleType.VirtualAssetBundle,
-};
-string root = BundleSimulateBuilder.SimulateBuild(p).PackageRootDirectory;
+`CommonData.UseEditorSimulateInEditor` 决定 Editor 下用哪种模式：
 
-// 真机构建（等价于 Bundle Builder 的 Build 按钮）
-var parameters = new ScriptableBuildParameters
-{
-    BuildOutputRoot = BundleBuilderHelper.GetDefaultBuildOutputRoot(),
-    BundledFileRoot = BundleBuilderHelper.GetStreamingAssetsRoot(),
-    BuildPipeline = nameof(EBuildPipeline.ScriptableBuildPipeline),
-    BuildBundleType = (int)EBundleType.AssetBundle,
-    BuildTarget = EditorUserBuildSettings.activeBuildTarget,
-    PackageName = "MainPackage",
-    PackageVersion = version,
-    EnableSharePackRule = true,
-    VerifyBuildingResult = true,
-    FileNameStyle = EFileNameStyle.HashName,
-    BundledCopyOption = EBundledCopyOption.ClearAndCopyAll,
-    CompressOption = ECompressOption.LZ4,
-};
-BuildResult result = new ScriptableBuildPipeline().Run(parameters, true);
-// result.Success / ErrorInfo / FailedTask / OutputPackageDirectory
-```
+| 值      | 模式     | 说明                                                        |
+| ------- | -------- | ----------------------------------------------------------- |
+| `true`  | 模拟构建 | 不需要服务器，按当前收集器配置直接读工程资源                |
+| `false` | 联机模式 | 从 `CommonData.HostServerRoot` 取版本和资源，流程和真机一致 |
 
-```csharp
-// 热更 DLL 一键生成（等价于菜单 HybridCLR/Generate/All）
-HybridCLR.Commands.PrebuildCommand.GenerateAll();
-
-// 收集器配置
-BundleCollectorSettingData.Setting.Packages / .UniqueBundleName
-BundleCollectorSettingData.SaveFile();
-AssetDatabase.LoadAssetAtPath<BundleCollectorSetting>("Assets/BundleCollectorSetting.asset");
-
-// 强制重新导入（避免"文件新了但包里是旧的"）
-AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
-```
-
----
-
-## 9. 收集规则与地址
-
-```csharp
-// AddressByFileName 的实现
-Path.GetFileNameWithoutExtension(data.AssetPath)
-```
-
-| 文件 | 生成的地址 |
-|---|---|
-| `MainPanel.prefab` | `MainPanel` |
-| `Game.HotUpdate.dll.bytes` | `Game.HotUpdate.dll` |
-| `mscorlib.dll.bytes` | `mscorlib.dll` |
-
-- `PackDirectory`：每个子文件夹一个 bundle；
-- 文件名寻址要求**全局唯一**，否则构建报 address 冲突；
-- DLL 必须命名为 `.dll.bytes`，直接放 `.dll` 会被 Unity 当托管插件编进包；
-- 收集器路径不存在时 `CheckConfigError` 抛 `Collect path is invalid`；
-- 按标签下载时，**未打任何标签的 bundle 视为公共依赖，始终包含**。
-
-构建产物（`Bundles/<平台>/<包>/<版本>/`）：
+联机模式下，本地服务器根目录需要有这样的结构：
 
 ```
-MainPackage.version      版本号
-MainPackage_<版本>.hash  清单哈希
-MainPackage_<版本>.bytes 清单二进制（运行时读它）
-MainPackage_<版本>.json  清单可读版
-MainPackage_<版本>.report
-*.bundle
+<服务器根目录>/Windows/MainPackage/MainPackage.version
+<服务器根目录>/Windows/MainPackage/<版本>/...
 ```
 
----
-
-## 10. 代码级易错点
-
-| 代码症状 | 根因 |
-|---|---|
-| `await` 返回但对象为 null，不报错 | `OperationAwaiter.GetResult()` 空实现 |
-| 协程/UniTask 卡住不动 | 下载器没 `StartDownload()` |
-| `[Remote] Version 未设置` | `LoadPackageManifestAsync` 早于 `RemoteService.Version` 赋值 |
-| 新资源加载报 bundle 缺失 | 更新未在加载资源前完成，或 tags 下载不全 |
-| 编辑器正常、真机 `MissingMethodException` | 泛型缺补充元数据 |
-| `未实现 IHotUpdateEntry`（仅编辑器） | 重复 `Assembly.Load` 产生同名程序集 |
-| 构建报 403 `BundleTempSizeIsZero` | bundle 内资源总字节数为 0（空文件） |
-| 改了热更代码但包里还是旧的 | 资产未重新导入 / 构建缓存 / 源码未保存 |
-| 出包报热更程序集冲突 | asmdef `Auto Referenced` 未关闭，或未登记 Hot Update Assemblies |
-| 编辑器缓存清不掉 | 沙盒目录是 `Library/yoo`，不是 `persistentDataPath` |
-| 收集器配置全空 | `Assets/BundleCollectorSetting.asset` 被空配置覆盖 |
-
----
-
-## 11. 构建发布流程
-
-一键脚本 `BuildAndDeployTools` 的正确顺序：
-
-```
-1. PrebuildCommand.GenerateAll()
-      → HybridCLRData/HotUpdateDlls/<Target>/Game.HotUpdate.dll
-      → HybridCLRData/AssembliesPostIl2CppStrip/<Target>/*.dll
-2. 拷贝 DLL      → Assets/GameRes/HotUpdate/Game.HotUpdate.dll.bytes
-3. 拷贝元数据    → Assets/GameRes/HotUpdate/<name>.bytes
-4. AssetDatabase.ImportAsset(..., ForceUpdate)   强制重新导入
-5. new ScriptableBuildPipeline().Run(params, true)
-6. 版本号 = 读取 CDN 上 MainPackage.version + 1
-7. 部署：<平台>/<包>/<版本>/ 全量拷贝 + 包根 MainPackage.version 覆盖
-```
-
-服务端回滚：把 `MainPackage.version` 改回旧版本号即可。YooAsset 不做版本比较，只认服务器给的版本；**旧版本目录不要删**。
-
----
-
-## 12. 小结论
-
-1. `HostPlayMode` = 内置（只读）+ 沙盒（可写）双文件系统，**沙盒是主文件系统**。
-2. 沙盒的 `.hash` / `.bytes` 存在就跳过下载 → 断网可回退的前提。
-3. `GetPackageVersion()` 依赖已加载清单，别在初始化阶段调用。
-4. 版本号是更新的唯一依据，YooAsset 不做版本比较。
-5. 编辑器模拟模式直接读 `Assets`，不会走 `Assembly.Load`（复用已编译程序集），只有真机验证得了热更。
-6. `PrebuildCommand.GenerateAll()` 编译 DLL 用的是 **active build target**，切平台后要重新生成。
-7. 空文件不能做资源占位：0 字节 bundle 会以 `ErrorCode 403` 中断构建。
+排查“地址不存在”这类错误时，先看 Console 里的 `清单就绪，版本 X` 是不是刚构建的那个版本。
